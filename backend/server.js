@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 
 const app = express();
+dotenv.config();
 
 app.use(cors());
 app.use(express.json());
@@ -32,21 +33,44 @@ app.get("/api/mcps/:crop", (req, res) => {
   res.json(mockPrices[crop] || { error: "No data for this crop" });
 });
 
-// 3. Mistral AI (via Ollama local API)
+// 3. SMOLLM2 AI (via Ollama local API)
 app.post("/ask", async (req, res) => {
-  const { prompt } = req.body;
+  const { prompt, city } = req.body;
 
-  // Tell frontend we’re streaming
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.setHeader("Transfer-Encoding", "chunked");
 
   try {
+    let weatherContext = "";
+
+    // 🔹 If city is provided, fetch weather
+    if (city) {
+      try {
+        const apiKey = process.env.OPENWEATHER_KEY;
+        const weatherRes = await fetch(
+          `https://api.openweathermap.org/data/2.5/weather?q=${city}&appid=${apiKey}&units=metric`
+        );
+        const weatherData = await weatherRes.json();
+
+        if (weatherData.main) {
+          weatherContext = `Weather in ${city}: ${weatherData.weather[0].description}, temp ${weatherData.main.temp}°C, feels like ${weatherData.main.feels_like}°C, humidity ${weatherData.main.humidity}%.`;
+        }
+      } catch (err) {
+        console.error("Weather fetch error:", err);
+      }
+    }
+
+    // 🔹 Inject weather info into final prompt
+    const finalPrompt = weatherContext
+      ? `${prompt}\n\nContext: ${weatherContext}`
+      : prompt;
+
     const response = await fetch("http://localhost:11434/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "smollm2:latest",
-        prompt,
+        prompt: finalPrompt,
         stream: true,
       }),
     });
@@ -65,7 +89,7 @@ app.post("/ask", async (req, res) => {
         try {
           const json = JSON.parse(line);
           if (json.response) {
-            res.write(json.response); // ✅ send piece to frontend
+            res.write(json.response);
           }
         } catch (err) {
           console.error("JSON parse error:", err);
